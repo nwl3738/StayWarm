@@ -1,25 +1,20 @@
 import openrouteservice
 import xml.etree.ElementTree as ET
 import folium
+import geopy
+import sys
 
 MPATH = "DistanceMatrix.txt"
 BUILDING_DATA = "BuildingData.xml"
 DIM = 5
+RITCOORDS = [43.08395011861679, -77.67580747604372]
 
 def main():
-    # openrouteservice setup
+    print(sys.argv)
     client = openrouteservice.Client(key = "5b3ce3597851110001cf6248bdc117dcf33b439eb7cac98d1e1329b6") # TODO add API key
     global CAMPUS # Global because of scope issues. It's never edited once created anyway.
     CAMPUS = buildRIT(BUILDING_DATA)
-    #clearDistMatrix(MPATH)
-    group1 = CAMPUS[1]
-    group2 = CAMPUS[4]
-    #print(group1.distance_entrance(group2, client))
-    seq = group2.getBestSequence(group1, client)
-    #print("Solution", seq)
-    jsonlist = getGeoJSON(seq, client, "output.gpx")
-    display_routes([43.08395011861679, -77.67580747604372], jsonlist)
-    
+    show_best_route(sys.argv[1], sys.argv[2], client)
 
 class BuildingGroup:
     """
@@ -148,9 +143,10 @@ class BuildingGroup:
         return CAMPUS.index(self)
 
 class Building:
-    def __init__(self, name, ID):
+    def __init__(self, name, ID, coords):
         self.name = name
         self.ID = ID
+        self.coords = coords
     def __string__(self):
         return self.name
     def distance(self, building, client):
@@ -182,12 +178,6 @@ class Entrance:
         return self.name
         
 
-def walkingGPX(coordlist, client):
-    """
-    Gets the GPX file for a certain route. Coordlist selection alternates (change this)
-    """
-    pass
-
 def buildRIT(file: str):
     """
     Returns a list with all the building groups and their subclasses
@@ -207,9 +197,7 @@ def buildGroup(grouproot):
     """
 
     groupname = grouproot.attrib["name"]
-    print(groupname)
     buildingtags = grouproot.findall(".//BUILDING") # All the building tag roots in xml
-    print(buildingtags)
     subbuildings = [] # Starts empty, at the end we'll use it to construct the building group.
     entrancetags = grouproot.findall(".//ENTRANCE") # All the entrances in xml
     entrances = [] # Starts empty, we'll append to it to create the entrance list
@@ -218,7 +206,8 @@ def buildGroup(grouproot):
         # Create the building objects and add them to the list
         name = building.find("NAME").text
         ID = building.find("ID").text
-        newb = Building(name, ID)
+        coords = tuple(map(float, building.find("COORDS").text.split(",")))
+        newb = Building(name, ID, coords)
         subbuildings.append(newb)
 
 
@@ -279,7 +268,7 @@ def clearDistMatrix(file):
     # Write to file
     storeMatrix(file, matrix)
 
-def getGeoJSON(grouplist, client, output):
+def getGeoJSON(grouplist, client):
     """
     Returns a GPX file based on the list of buildinggroups provided
     """
@@ -297,27 +286,41 @@ def getGeoJSON(grouplist, client, output):
         jsonlist.append(gpxstring)
         #coords.extend([coords1, coords2])
 
-    # API call
-    skips = list(range(2, len(coords), 2))
-    gpxstring = str(openrouteservice.directions.directions(client, coords, profile = "foot-walking", format = "geojson", skip_segments = skips)).replace("'",'"')
-    # Store GPX file
-    gpx = open(output, "w")
-    gpx.write(gpxstring)
-    gpx.close()
-
     return jsonlist
 
-def display_routes(center, jsonlist):
+def display_routes(center, jsonlist, startcoords, endcoords):
+
     m = folium.Map(location = center, zoom_start = 16.48)
+
+    folium.CircleMarker(location = startcoords, radius = 2, weight = 5).add_to(m)
+    folium.CircleMarker(location = endcoords, radius = 2, weight = 5).add_to(m)
 
     for track in jsonlist:
         folium.GeoJson(track).add_to(m)
     
     m.show_in_browser()
 
-def show_best_route(building1, building2):
+def show_best_route(building1str, building2str, client):
     # TODO add markers for each building using address lookup
-    pass
+    group1, group2 = None, None
+    
+    for group in CAMPUS:
+        for building in group.subbuildings:
+            if building1str.lower() in building.name.lower():
+                point1 = building.coords[::-1]
+                group1 = group
+            if building2str.lower() in building.name.lower():
+                point2 = building.coords[::-1]
+                group2 = group
+
+    seq = group1.getBestSequence(group2, client)
+    jsonlist = getGeoJSON(seq, client)
+    display_routes(RITCOORDS, jsonlist, point1, point2)
+
+def getBuildingCoords(ID):
+    locator = geopy.geocoders.Nominatim(user_agent = "myGeocoder")
+    location = locator.geocode(str(ID) + " Lomb Memorial Drive")
+    return (location.latitude, location.longitude)
 
 if __name__ == "__main__":
     main()
